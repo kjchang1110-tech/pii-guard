@@ -138,6 +138,32 @@ def _create_nlp_engine(ckip_model: str):
         )
 
 
+# CKIP BERT max sequence = 512 tokens。TransformersNlpEngine 對超長文本截斷後
+# spacy-transformers alignment 整體失效——不是只丟尾段實體、是**全文 NER 實體全滅**
+# （實測：300 字命中、600 字含長 ASCII 行全滅；regex recognizer 不受影響）。
+# 修法＝分塊偵測 + offset 平移合併。塊長取保守 350 字（中文 ≈ 1 token/字、
+# ASCII 子詞另計、留 margin）；優先在換行處切（regex 實體極少跨行、
+# 避免地址/電話被硬切兩半）；單行超長才 hard cut。
+_CHUNK_MAX_CHARS = 350
+
+
+def _chunk_spans(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> list[tuple[int, int]]:
+    """把 text 切成 [(start, end), ...] 連續覆蓋全文；優先在換行切。"""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        if n - pos <= max_chars:
+            spans.append((pos, n))
+            break
+        cut = text.rfind("\n", pos + 1, pos + max_chars)
+        if cut <= pos:
+            cut = pos + max_chars   # 單行超長、hard cut（罕見、接受）
+        spans.append((pos, cut))
+        pos = cut
+    return spans
+
+
 def _merge_adjacent_spans(results: list[RecognizerResult]) -> list[RecognizerResult]:
     """Merge adjacent or overlapping spans of the same entity type.
 
@@ -237,6 +263,27 @@ def _expand_person_surname(
     return expanded
 
 
+def _boost_tw_name_shape(
+    results: list[RecognizerResult], text: str
+) -> list[RecognizerResult]:
+    """台灣姓名形狀先驗：姓氏起頭的 2-4 字 PERSON 候選 +0.2。
+
+    CKIP 在雜訊文脈（markdown 標記/長 ASCII 行/表格）對真人名的信心會掉到
+    threshold 邊緣（實測 0.4999 vs 短文 >0.5）。候選已由 NER 提出、只是信心
+    不足——形狀符合台灣姓名（常見姓 + 總長 2-4）就加分、讓邊緣真陽性過門檻。
+    """
+    boosted: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type == "PERSON":
+            s = text[r.start:r.end]
+            if 2 <= len(s) <= 4 and (s[0] in _TW_SURNAMES_1 or s[:2] in _TW_SURNAMES_2):
+                r = RecognizerResult(
+                    entity_type=r.entity_type, start=r.start, end=r.end,
+                    score=min(1.0, r.score + 0.2),
+                )
+        boosted.append(r)
+    return boosted
+
 class PiiGuardEngine:
     """
     Orchestrates PII detection and reversible anonymization for Traditional Chinese text.
@@ -276,16 +323,35 @@ class PiiGuardEngine:
     # ------------------------------------------------------------------
 
     def _raw_detect(self, text: str) -> list[RecognizerResult]:
-        """Run analyzer + post-processing (merge spans, resolve conflicts)."""
-        results = self._analyzer.analyze(
-            text=text,
-            language="zh",
-            entities=SUPPORTED_ENTITIES,
-            score_threshold=self.score_threshold,
-        )
+        """Run analyzer + post-processing (merge spans, resolve conflicts).
+
+        長文分塊（見 _chunk_spans docstring）：整篇餵 analyzer 會踩 CKIP 512-token
+        截斷 → alignment 全滅（全文 NER 實體歸零）。逐塊 analyze 後把 span offset
+        平移回全文座標、再統一跑 merge / filter / surname-expand。
+        """
+        # 低門檻初篩（讓 threshold 邊緣的真陽性進 pipeline）→ 姓名形狀加分 →
+        # 最後才按正式 threshold 過濾（非 PERSON / 非姓名形狀者結果與單段直篩相同）。
+        prelim_threshold = min(0.3, self.score_threshold)
+        results: list[RecognizerResult] = []
+        for c_start, c_end in _chunk_spans(text):
+            chunk_results = self._analyzer.analyze(
+                text=text[c_start:c_end],
+                language="zh",
+                entities=SUPPORTED_ENTITIES,
+                score_threshold=prelim_threshold,
+            )
+            for r in chunk_results:
+                results.append(RecognizerResult(
+                    entity_type=r.entity_type,
+                    start=r.start + c_start,
+                    end=r.end + c_start,
+                    score=r.score,
+                ))
         results = _merge_adjacent_spans(results)
         results = _filter_person_over_date(results)
         results = _expand_person_surname(results, text)
+        results = _boost_tw_name_shape(results, text)
+        results = [r for r in results if r.score >= self.score_threshold]
         return results
 
     # ------------------------------------------------------------------

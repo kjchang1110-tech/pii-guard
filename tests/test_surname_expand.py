@@ -48,3 +48,33 @@ def test_non_person_untouched():
     mobile = RecognizerResult(entity_type="TW_MOBILE", start=1, end=11, score=0.9)
     out = _expand_person_surname([mobile], text)
     assert (out[0].start, out[0].end) == (1, 11)
+
+
+# ── _chunk_spans（長文分塊、CKIP 512-token 截斷修）─────────────────────────
+
+from pii_guard.pipeline.engine import _chunk_spans
+
+
+def test_chunk_spans_cover_text_exactly():
+    text = ("第一段內容\n" * 100)   # 600 chars
+    spans = _chunk_spans(text, max_chars=350)
+    assert spans[0][0] == 0 and spans[-1][1] == len(text)
+    for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
+        assert e1 == s2   # 連續無縫
+    assert all(e - s <= 350 for s, e in spans)
+
+
+def test_chunk_spans_prefer_newline_cut():
+    text = "甲" * 300 + "\n" + "乙" * 300
+    spans = _chunk_spans(text, max_chars=350)
+    assert spans[0] == (0, 300)   # 在換行切、不硬切 350
+
+
+def test_chunk_spans_hard_cut_single_long_line():
+    text = "甲" * 800   # 無換行
+    spans = _chunk_spans(text, max_chars=350)
+    assert spans == [(0, 350), (350, 700), (700, 800)]
+
+
+def test_chunk_spans_short_text_single_span():
+    assert _chunk_spans("短文", max_chars=350) == [(0, 2)]

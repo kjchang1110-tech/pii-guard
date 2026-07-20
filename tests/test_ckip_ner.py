@@ -73,10 +73,19 @@ class TestCkipLocationDetection:
     """CKIP NER detects LOCATION entities."""
 
     def test_location_detected(self, ckip_engine):
+        # 完整門牌地址現由 TwAddressRecognizer（TW_ADDRESS、score 0.9）優先吃掉
+        # （比籠統 LOCATION 更精確）；純地名仍走 LOCATION——兩者皆屬正確偵測。
         text = "住址：台北市信義區松仁路100號。"
         anonymized, mapping = ckip_engine.anonymize(text)
-        loc_keys = [k for k in mapping if "LOCATION" in k]
-        assert len(loc_keys) >= 1, f"Expected LOCATION entity, mapping={mapping}"
+        loc_keys = [k for k in mapping if "LOCATION" in k or "TW_ADDRESS" in k]
+        assert len(loc_keys) >= 1, f"Expected LOCATION/TW_ADDRESS, mapping={mapping}"
+
+    def test_bare_place_name_still_location(self, ckip_engine):
+        # 無門牌的裸地名不應被 TW_ADDRESS 搶（pattern 需路+號）、仍走 LOCATION
+        text = "他住在台北市信義區附近。"
+        _, mapping = ckip_engine.anonymize(text)
+        assert any("LOCATION" in k for k in mapping), f"mapping={mapping}"
+        assert not any("TW_ADDRESS" in k for k in mapping), f"mapping={mapping}"
 
     def test_location_roundtrip(self, ckip_engine):
         original = "出生地高雄市三民區，現居台中市西屯區。"
@@ -140,3 +149,16 @@ class TestCkipCombinedWithTwRegex:
         assert "<TW_MOBILE_1>" in anonymized
         assert "<TW_BUSINESS_ID_1>" in anonymized
         assert "<EMAIL_ADDRESS_1>" in anonymized
+
+
+@pytest.mark.slow
+def test_long_document_person_not_lost(ckip_engine):
+    """回歸（2026-07-20 驗屋報告實測）：>512 token 長文整篇餵 analyzer 會踩
+    CKIP 截斷 → alignment 全滅、全文 PERSON 歸零（300 字命中 / 600 字全滅）。
+    分塊修後：長文中段的人名必須偵測得到。"""
+    filler = "本建築物檢測係以科學儀器及目視等非破壞性方式進行檢測。\n" * 30   # ~800 chars
+    long_ascii = "![image 1](<some-very-long-ascii/path_to/imageFile12345.png>)\n"
+    text = "# 報告\n" + long_ascii + filler[:200] + "\n委託人：林宜樺 電話：0932-798-515\n" + filler
+    results = ckip_engine.detect(text)
+    persons = [text[r.start:r.end] for r in results if r.entity_type == "PERSON"]
+    assert "林宜樺" in persons, f"長文 PERSON 全滅回歸: {persons}"
