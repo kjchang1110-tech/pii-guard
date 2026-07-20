@@ -420,3 +420,63 @@ class TestTwBankAccountRecognizer:
         near_text = "帳號" + "X" * 10 + "123456789012"
         results = self.r.analyze(near_text, entities=["TW_BANK_ACCOUNT"])
         assert len(results) == 1
+
+
+# ── TwAddressRecognizer ───────────────────────────────────────────────────────
+
+class TestTwAddressRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from pii_guard.recognizers.tw_address_recognizer import TwAddressRecognizer
+        self.r = TwAddressRecognizer()
+
+    @pytest.mark.parametrize("text,expected_match", [
+        ("高雄市鳳山區中山西路 100 號",          True),   # full form + spaces
+        ("高雄市鳳山區中山西路100號12樓之3",     True),   # trailing floor (span test below)
+        ("台北市信義區信義路五段7號",            True),   # 段
+        ("新竹縣竹北市光明六路10巷2號",          True),   # 縣+市+巷
+        ("臺中市西屯區臺灣大道三段99號",         True),   # 臺 variant + 大道
+        ("桃園市中壢區中山東路二段77之1號",      True),   # 之N號
+        ("高雄市鳳山區",                        False),  # no road/no 號
+        ("中山西路",                            False),  # road alone, no 號
+    ])
+    def test_pattern(self, text, expected_match):
+        results = self.r.analyze(text, entities=["TW_ADDRESS"])
+        matched = any(r.entity_type == "TW_ADDRESS" for r in results)
+        assert matched == expected_match, f"text={text!r}, results={results}"
+
+    def test_span_stops_at_hao_keeps_floor(self):
+        """核心 span 設計：吃到「號」為止、樓層戶別（12樓之3）必須存活。"""
+        text = "物件地址：高雄市鳳山區中山西路 100 號 12 樓之 3"
+        results = self.r.analyze(text, entities=["TW_ADDRESS"])
+        assert len(results) >= 1
+        top = max(results, key=lambda r: r.score)
+        matched = text[top.start:top.end]
+        assert matched.endswith("號"), f"span 應止於號: {matched!r}"
+        assert "樓" not in matched, f"span 不得吃樓層: {matched!r}"
+
+    def test_partial_needs_context(self):
+        """無縣市的路名地址：score 0.45 < threshold、須靠 context 詞升分。"""
+        results = self.r.analyze("中山西路100號", entities=["TW_ADDRESS"])
+        # analyze() 不帶 nlp_artifacts、context enhancer 不啟動 → 只驗 raw score < 0.5
+        assert all(r.score < 0.5 for r in results)
+
+
+# ── TwLandlineRecognizer（7 碼區域 + 雙 dash、驗屋報告修補）────────────────────
+
+class TestTwLandlineSevenDigit:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.r = TwLandlineRecognizer()
+
+    @pytest.mark.parametrize("text,expected_match", [
+        ("(07)771-2345", True),     # 高雄 7 碼 + paren（原 pattern 漏）
+        ("(02)2712-3456", True),    # 台北 8 碼 + paren（原有）
+        ("07-771-2345", True),      # 雙 dash 7 碼
+        ("02-2712-3456", True),     # 雙 dash 8 碼
+        ("0771234", False),         # 太短
+    ])
+    def test_pattern(self, text, expected_match):
+        results = self.r.analyze(text, entities=["TW_LANDLINE"])
+        matched = any(r.entity_type == "TW_LANDLINE" for r in results)
+        assert matched == expected_match, f"text={text!r}, results={results}"

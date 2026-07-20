@@ -183,6 +183,60 @@ def _filter_person_over_date(results: list[RecognizerResult]) -> list[Recognizer
     ]
 
 
+# Common Taiwan surnames (single-char, ~top 120 by frequency) plus frequent
+# compound surnames. Used by _expand_person_surname.
+_TW_SURNAMES_1 = set(
+    "陳林黃張李王吳劉蔡楊許鄭謝郭洪曾邱廖賴徐周葉蘇莊江呂何蕭羅高潘簡朱鍾彭游詹胡施沈余趙盧梁顏柯翁魏孫戴范方宋鄧杜傅侯曹薛丁卓阮馬董唐藍蔣古姚連馮歐康石溫紀袁程塗蘇涂庄嚴韓金田白杭汪祝毛狄米貝明臧計伏成談宋茅熊姜巫甘秦邵利鮑史"
+)
+_TW_SURNAMES_2 = {"歐陽", "張簡", "陳黃", "范姜", "周黃", "江謝", "司馬", "諸葛", "上官", "張陳"}
+
+
+def _expand_person_surname(
+    results: list[RecognizerResult], text: str
+) -> list[RecognizerResult]:
+    """Expand PERSON spans leftward to absorb a preceding surname character.
+
+    CKIP NER sometimes yields only the given name（「陳大文」→ span「大文」），
+    leaving the surname in the output. If the char(s) immediately before a
+    PERSON span form a common Taiwan surname and are not claimed by another
+    entity span, extend the PERSON span to include them.
+    """
+    occupied: list[tuple[int, int]] = [
+        (r.start, r.end) for r in results
+    ]
+
+    def _claimed(pos: int, current: RecognizerResult) -> bool:
+        return any(
+            s <= pos < e
+            for (s, e), r in zip(occupied, results)
+            if r is not current
+        )
+
+    expanded: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type != "PERSON":
+            expanded.append(r)
+            continue
+        start = r.start
+        two = text[start - 2:start]
+        one = text[start - 1:start]
+        if (
+            len(two) == 2
+            and two in _TW_SURNAMES_2
+            and not _claimed(start - 2, r)
+            and not _claimed(start - 1, r)
+        ):
+            start -= 2
+        elif one and one in _TW_SURNAMES_1 and not _claimed(start - 1, r):
+            start -= 1
+        if start != r.start:
+            r = RecognizerResult(
+                entity_type=r.entity_type, start=start, end=r.end, score=r.score,
+            )
+        expanded.append(r)
+    return expanded
+
+
 class PiiGuardEngine:
     """
     Orchestrates PII detection and reversible anonymization for Traditional Chinese text.
@@ -231,6 +285,7 @@ class PiiGuardEngine:
         )
         results = _merge_adjacent_spans(results)
         results = _filter_person_over_date(results)
+        results = _expand_person_surname(results, text)
         return results
 
     # ------------------------------------------------------------------

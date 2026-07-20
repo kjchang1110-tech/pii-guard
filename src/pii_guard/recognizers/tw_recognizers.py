@@ -11,6 +11,7 @@ from pii_guard.recognizers.tw_extra_recognizers import (
     TwIntlMobileRecognizer,
     TwLicensePlateRecognizer,
 )
+from pii_guard.recognizers.tw_address_recognizer import TwAddressRecognizer
 from pii_guard.recognizers.tw_id_recognizer import (
     TwArcRecognizer,
     TwNationalIdRecognizer,
@@ -35,6 +36,7 @@ def get_all_tw_recognizers() -> list[EntityRecognizer]:
         TwLicensePlateRecognizer(),
         TwBirthDateRecognizer(),
         TwBankAccountRecognizer(),
+        TwAddressRecognizer(),
     ]
 
 
@@ -51,4 +53,5 @@ TW_ENTITY_TYPES: list[str] = [
     "TW_LICENSE_PLATE",
     "TW_BIRTH_DATE",
     "TW_BANK_ACCOUNT",
+    "TW_ADDRESS",
 ]

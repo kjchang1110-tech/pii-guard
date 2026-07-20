@@ -42,10 +42,13 @@ class TwLandlineRecognizer(PatternRecognizer):
     PATTERNS: ClassVar[list[Pattern]] = [
         # Compact: 0212345678
         Pattern("TW_LANDLINE_COMPACT", r"(?<!\d)0[2-8]\d{7,8}(?!\d)", 0.7),
-        # With parentheses: (02)1234-5678
-        Pattern("TW_LANDLINE_PAREN", r"\(0[2-8]\)\s*\d{4}[-\s]?\d{4}", 0.85),
+        # With parentheses: (02)1234-5678 / (07)771-2345 — 7-digit regions
+        # (e.g. Kaohsiung 07) have a 3-digit prefix, so allow \d{3,4}.
+        Pattern("TW_LANDLINE_PAREN", r"\(0[2-8]\)\s*\d{3,4}[-\s]?\d{4}", 0.85),
         # With hyphen after area code: 02-12345678
         Pattern("TW_LANDLINE_HYPHEN", r"(?<!\d)0[2-8]-\d{7,8}(?!\d)", 0.85),
+        # Double-dash: 07-771-2345 / 02-2712-3456
+        Pattern("TW_LANDLINE_DOUBLE_DASH", r"(?<!\d)0[2-8]-\d{3,4}-\d{4}(?!\d)", 0.85),
     ]
     CONTEXT: ClassVar[list[str]] = [
         "電話", "市話", "辦公室", "公司電話", "聯絡電話", "分機", "phone", "tel",
