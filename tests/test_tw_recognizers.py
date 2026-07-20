@@ -480,3 +480,34 @@ class TestTwLandlineSevenDigit:
         results = self.r.analyze(text, entities=["TW_LANDLINE"])
         matched = any(r.entity_type == "TW_LANDLINE" for r in results)
         assert matched == expected_match, f"text={text!r}, results={results}"
+
+
+# ── TwLabeledNameRecognizer（表格 cell 孤立姓名、驗屋報告實測補洞）──────────
+
+class TestTwLabeledNameRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from pii_guard.recognizers.tw_labeled_name_recognizer import TwLabeledNameRecognizer
+        self.r = TwLabeledNameRecognizer()
+
+    @pytest.mark.parametrize("text,expected", [
+        ("|委託人|林宜樺|初驗日期|114 年|",  "林宜樺"),   # 真實殘留案例 1
+        ("|委託單位|沈士傑|建案名稱|某案|",   "沈士傑"),   # 真實殘留案例 2
+        ("|委託單位| |沈士傑|檢測日期| |x|", "沈士傑"),   # 中間夾空 cell
+        ("買方：王小明",                     "王小明"),   # 冒號形式
+        ("|姓名|歐陽志明|",                  "歐陽志明"), # 複姓 4 字
+    ])
+    def test_hits(self, text, expected):
+        results = self.r.analyze(text, entities=["PERSON"])
+        assert len(results) == 1, f"text={text!r} results={results}"
+        assert text[results[0].start:results[0].end] == expected
+
+    @pytest.mark.parametrize("text", [
+        "|委託單位|好宅驗屋股份有限公司|",   # 公司名超長、不吃
+        "|委託人|先生|",                    # 稱謂非姓氏起頭
+        "|檢測項目|窗框滲水|",              # 非 party 標籤
+        "委託人到場確認林宜樺代表簽名",       # 標籤後無分隔符、不吃句子
+    ])
+    def test_no_false_positive(self, text):
+        results = self.r.analyze(text, entities=["PERSON"])
+        assert results == [], f"text={text!r} results={results}"
