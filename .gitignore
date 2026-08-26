@@ -16,9 +16,8 @@ venv/
 env/
 .env
 
-# uv
+# uv (the lock file is tracked on purpose: this repo is installed by cloning)
 .uv/
-uv.lock
 
 # Secrets & credentials
 .env
@@ -71,3 +70,6 @@ htmlcov/
 # Logs
 *.log
 logs/
+
+# python 3.13 migration backups
+*.bak-py311

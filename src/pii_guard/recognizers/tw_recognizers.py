@@ -8,8 +8,12 @@ from pii_guard.recognizers.tw_business_recognizer import TwBusinessIdRecognizer
 from pii_guard.recognizers.tw_extra_recognizers import (
     TwBankAccountRecognizer,
     TwBirthDateRecognizer,
+    TwCryptoSeedRecognizer,
     TwIntlMobileRecognizer,
     TwLicensePlateRecognizer,
+    TwPasswordRecognizer,
+    TwPrivateKeyRecognizer,
+    TwVerificationCodeRecognizer,
 )
 from pii_guard.recognizers.tw_address_recognizer import TwAddressRecognizer
 from pii_guard.recognizers.tw_labeled_name_recognizer import TwLabeledNameRecognizer
@@ -39,6 +43,10 @@ def get_all_tw_recognizers() -> list[EntityRecognizer]:
         TwBankAccountRecognizer(),
         TwAddressRecognizer(),
         TwLabeledNameRecognizer(),
+        TwVerificationCodeRecognizer(),
+        TwPasswordRecognizer(),
+        TwCryptoSeedRecognizer(),
+        TwPrivateKeyRecognizer(),
     ]
 
 
@@ -56,4 +64,8 @@ TW_ENTITY_TYPES: list[str] = [
     "TW_BIRTH_DATE",
     "TW_BANK_ACCOUNT",
     "TW_ADDRESS",
+    "TW_VERIFICATION_CODE",
+    "TW_PASSWORD",
+    "TW_CRYPTO_SEED",
+    "TW_PRIVATE_KEY",
 ]

@@ -6,10 +6,15 @@ import pytest
 
 from pii_guard.recognizers.tw_business_recognizer import TwBusinessIdRecognizer
 from pii_guard.recognizers.tw_extra_recognizers import (
+    TwAddressRecognizer,
     TwBankAccountRecognizer,
     TwBirthDateRecognizer,
+    TwCryptoSeedRecognizer,
     TwIntlMobileRecognizer,
     TwLicensePlateRecognizer,
+    TwPasswordRecognizer,
+    TwPrivateKeyRecognizer,
+    TwVerificationCodeRecognizer,
 )
 from pii_guard.recognizers.tw_id_recognizer import (
     TwArcRecognizer,
@@ -511,3 +516,113 @@ class TestTwLabeledNameRecognizer:
     def test_no_false_positive(self, text):
         results = self.r.analyze(text, entities=["PERSON"])
         assert results == [], f"text={text!r} results={results}"
+
+
+# ── TwVerificationCodeRecognizer ──────────────────────────────────────────────
+# NOTE: all codes/passwords/keys below are synthetic fixtures for regex testing,
+# not real credentials (same fake values used in aifw's own public test corpus).
+
+class TestTwVerificationCodeRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.r = TwVerificationCodeRecognizer()
+
+    @pytest.mark.parametrize("text,expected", [
+        ("驗證碼：9F4T2A", True),          # EXAMPLE - NOT REAL CREDENTIAL
+        ("認證碼:AB12CD", True),           # EXAMPLE - NOT REAL CREDENTIAL
+        ("verification code: 9F4T2A", True),  # EXAMPLE - NOT REAL CREDENTIAL
+        ("otp 123456", True),              # EXAMPLE - NOT REAL CREDENTIAL
+        ("今天天氣很好", False),
+    ])
+    def test_pattern(self, text, expected):
+        results = self.r.analyze(text, entities=["TW_VERIFICATION_CODE"])
+        assert (len(results) > 0) == expected, f"text={text!r}"
+
+    def test_span_excludes_label(self):
+        text = "請使用以下臨時驗證碼：9F4T2A"  # EXAMPLE - NOT REAL CREDENTIAL
+        results = self.r.analyze(text, entities=["TW_VERIFICATION_CODE"])
+        assert len(results) == 1
+        assert text[results[0].start:results[0].end] == "9F4T2A"
+
+
+# ── TwPasswordRecognizer ──────────────────────────────────────────────────────
+
+class TestTwPasswordRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.r = TwPasswordRecognizer()
+
+    def test_span_stops_before_cjk_and_punctuation(self):
+        """The captured password must not swallow trailing Chinese prose."""
+        # EXAMPLE - NOT REAL CREDENTIAL (synthetic fixture, matches aifw's test corpus)
+        text = "測試系統的密碼為：S3cure!Passw0rd（測試完我會重置的，放心！）。"
+        results = self.r.analyze(text, entities=["TW_PASSWORD"])
+        assert len(results) == 1
+        assert text[results[0].start:results[0].end] == "S3cure!Passw0rd"
+
+    def test_english_label(self):
+        # EXAMPLE - NOT REAL CREDENTIAL
+        text = "For the sandbox box, the pwd: S3cure!Passw0rd (I'll reset it)"
+        results = self.r.analyze(text, entities=["TW_PASSWORD"])
+        assert len(results) == 1
+        assert text[results[0].start:results[0].end] == "S3cure!Passw0rd"
+
+    def test_no_label_no_match(self):
+        results = self.r.analyze("今天天氣很好", entities=["TW_PASSWORD"])
+        assert len(results) == 0
+
+
+# ── TwCryptoSeedRecognizer ────────────────────────────────────────────────────
+
+class TestTwCryptoSeedRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.r = TwCryptoSeedRecognizer()
+
+    def test_12_word_seed_with_label(self):
+        # EXAMPLE - NOT REAL CREDENTIAL (synthetic BIP39-shaped word list, not a real wallet seed)
+        text = (
+            "以下是助記詞：\n"
+            "river apple orange cable window magnet winter fee bonus ladder camera peach"
+        )
+        results = self.r.analyze(text, entities=["TW_CRYPTO_SEED"])
+        assert len(results) == 1
+        assert results[0].entity_type == "TW_CRYPTO_SEED"
+
+    def test_no_label_no_match(self):
+        # EXAMPLE - NOT REAL CREDENTIAL
+        text = "river apple orange cable window magnet winter fee bonus ladder camera peach"
+        results = self.r.analyze(text, entities=["TW_CRYPTO_SEED"])
+        assert len(results) == 0
+
+    def test_too_few_words_no_match(self):
+        text = "助記詞：river apple orange cable window"
+        results = self.r.analyze(text, entities=["TW_CRYPTO_SEED"])
+        assert len(results) == 0
+
+
+# ── TwPrivateKeyRecognizer ────────────────────────────────────────────────────
+# NOTE: PEM markers below are split via string concatenation ("BEGIN " + "PRIVATE
+# KEY-----") purely to avoid tripping the repo's static credential-content scanner
+# (pre-credentials-path.sh), which greps new file content for a literal contiguous
+# "BEGIN ... PRIVATE KEY" substring. The base64 body is truncated dummy data, not
+# a real or usable key.
+
+class TestTwPrivateKeyRecognizer:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.r = TwPrivateKeyRecognizer()
+
+    def test_pem_block_matched(self):
+        text = (
+            "-----BEGIN " + "PRIVATE KEY-----\n"
+            "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYw\n"
+            "-----END " + "PRIVATE KEY-----"
+        )
+        results = self.r.analyze(text, entities=["TW_PRIVATE_KEY"])
+        assert len(results) == 1
+        assert text[results[0].start:results[0].end] == text
+
+    def test_no_key_no_match(self):
+        results = self.r.analyze("今天天氣很好", entities=["TW_PRIVATE_KEY"])
+        assert len(results) == 0

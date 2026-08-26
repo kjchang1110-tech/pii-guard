@@ -50,18 +50,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.5,
         help="Presidio 信心分數閾值（預設：0.5）",
     )
-    anon.add_argument(
-        "--llm-fallback",
-        action="store_true",
-        default=False,
-        help="啟用 Ollama LLM 輔助偵測（需先安裝 Ollama 並拉取模型）",
-    )
-    anon.add_argument(
-        "--ollama-model",
-        type=str,
-        default="qwen2.5:1.5b",
-        help="Ollama 模型名稱（預設：qwen2.5:1.5b）",
-    )
 
     # ── restore ──────────────────────────────────────────────────────────
     restore = subparsers.add_parser(
@@ -97,12 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="ckiplab/bert-base-chinese-ner",
         help="CKIP NER 模型 ID 或本地路徑",
     )
-    serve.add_argument(
-        "--llm-fallback",
-        action="store_true",
-        default=False,
-        help="啟用 Ollama LLM 輔助偵測",
-    )
 
     return parser
 
@@ -129,6 +111,14 @@ def _default_output_path(input_path: str) -> Path:
     return p.with_stem(p.stem + ".anon").with_suffix(out_ext)
 
 
+def _default_restore_output_path(input_path: str) -> Path:
+    """Generate default restore output path for structured formats: <stem>.restored.<ext>."""
+    p = Path(input_path)
+    from pii_guard.file_handlers import get_output_extension
+    out_ext = get_output_extension(p)
+    return p.with_stem(p.stem + ".restored").with_suffix(out_ext)
+
+
 def cmd_anonymize(args: argparse.Namespace) -> int:
     from pii_guard.pipeline.engine import PiiGuardEngine
     from pii_guard.file_handlers import read_file, write_file, is_supported, PLAIN_TEXT_EXTENSIONS
@@ -139,8 +129,6 @@ def cmd_anonymize(args: argparse.Namespace) -> int:
     engine = PiiGuardEngine(
         ckip_model=args.model,
         score_threshold=args.threshold,
-        llm_fallback=args.llm_fallback,
-        ollama_model=args.ollama_model,
     )
 
     if is_stdin:
@@ -200,12 +188,14 @@ def cmd_restore(args: argparse.Namespace) -> int:
 
         if content.file_type == "plain":
             restored = PiiGuardEngine.deanonymize(content.text, mapping)
-            output_path = args.output or Path(args.input)
-            _write_output(restored, output_path)
+            _write_output(restored, args.output)
         else:
-            # Structured format: reverse mapping to restore per-cell
+            # Structured format: reverse mapping to restore per-cell.
+            # Binary formats can't go to stdout, so fall back to a derived
+            # filename (never the input path itself) rather than silently
+            # overwriting the de-identified file the caller passed in.
             reverse_mapping = {v: k for k, v in mapping.items()}
-            output_path = args.output or Path(args.input)
+            output_path = args.output or _default_restore_output_path(args.input)
             write_file(content, "", reverse_mapping, output_path)
     else:
         # Fallback: treat as plain text
@@ -220,8 +210,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import os
 
     os.environ.setdefault("PII_GUARD_MODEL", args.model)
-    if args.llm_fallback:
-        os.environ["PII_GUARD_LLM_FALLBACK"] = "1"
     from pii_guard.server import app
 
     app.run(transport="stdio")
