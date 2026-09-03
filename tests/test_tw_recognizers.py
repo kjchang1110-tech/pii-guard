@@ -182,17 +182,28 @@ class TestTwBusinessIdRecognizer:
         self.r = TwBusinessIdRecognizer()
 
     # --- checksum unit tests ---
+    # Oracle＝財政部「營利事業統一編號檢查碼邏輯修正說明」附件的三個官方範例
+    # （04595257 / 10458575 / 19312376）——不是照實作反推的數字。
     @pytest.mark.parametrize("number,expected_valid", [
-        ("04595257", True),   # sum=40, 40%10==0
-        ("12345678", False),  # sum=42, 42%10==2
-        ("00000000", True),   # sum=0, 0%10==0 (edge case)
-        # 7th digit = 7 special rule: total%10 != 0 but (total-1)%10 == 0
-        ("10000070", True),   # d7=7, total=11, (11-1)%10==0 → special rule only
-        ("10000178", True),   # d7=7, total=21, (21-1)%10==0 → special rule only
-        ("10000276", True),   # d7=7, total=21, (21-1)%10==0 → special rule only
+        ("04595257", True),   # 官方範例：Z=40、舊制/新制皆整除
+        ("10458575", True),   # 官方範例：第 7 位 7、取 0 → Z2=20（naive total 30 - 10）
+        ("19312376", True),   # 官方範例：第 7 位 7、取 1 → Z1=30（naive total 39 - 9）
+        #   ↑ 舊實作 (total-1)%10 會把這個官方合法統編判無效
+        ("12345678", False),  # 第 7 位 7、Z 候選 32/33、皆非 5 倍數
+        ("00000000", True),   # sum=0 (edge case)
+        # 112/4 新制才合法（Z 是 5 的倍數但不是 10 的倍數）
+        ("04595252", True),   # 04595257 末碼 7→2：Z=35
+        ("10458570", True),   # 10458575 末碼 5→0：第 7 位 7、Z2=15
+        ("04595253", False),  # Z=36、鄰近值對照
     ])
     def test_checksum(self, number, expected_valid):
         assert TwBusinessIdRecognizer._validate_checksum(number) == expected_valid, number
+
+    def test_new_format_business_id_detected_in_context(self):
+        # 新制統編（僅 mod-5 合法）帶語境須被抓；舊制實作會靜默漏遮
+        text = "統一編號04595252"
+        results = self.r.analyze(text, entities=["TW_BUSINESS_ID"])
+        assert len(results) == 1 and text[results[0].start:results[0].end] == "04595252"
 
     # --- context filtering ---
     def test_no_context_no_match(self):
@@ -501,6 +512,10 @@ class TestTwLabeledNameRecognizer:
         ("|委託單位| |沈士傑|檢測日期| |x|", "沈士傑"),   # 中間夾空 cell
         ("買方：王小明",                     "王小明"),   # 冒號形式
         ("|姓名|歐陽志明|",                  "歐陽志明"), # 複姓 4 字
+        # cell-per-line（PDF 文字層逐格一行、驗屋報告頁尾表實測殘留形）
+        ("檢驗單位 \n委託人 \n林宜樺 \n檢驗日期 \n114 年", "林宜樺"),
+        ("委託人\n姓名\n林宜樺\n",          "林宜樺"),   # 落選候選「姓名」本身是標籤、須重掃
+        ("買方：\n王小明\n",                "王小明"),   # 冒號後換行（原本就支援、鎖住）
     ])
     def test_hits(self, text, expected):
         results = self.r.analyze(text, entities=["PERSON"])
@@ -512,6 +527,8 @@ class TestTwLabeledNameRecognizer:
         "|委託人|先生|",                    # 稱謂非姓氏起頭
         "|檢測項目|窗框滲水|",              # 非 party 標籤
         "委託人到場確認林宜樺代表簽名",       # 標籤後無分隔符、不吃句子
+        "委託人\n\n林宜樺",                 # 空行＝另一區塊、換行形只容單一換行
+        "委託人\n到場確認林宜樺代表簽名",     # 換行後接句子、姓名形狀後無 cell 邊界
     ])
     def test_no_false_positive(self, text):
         results = self.r.analyze(text, entities=["PERSON"])

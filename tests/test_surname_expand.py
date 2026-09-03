@@ -27,6 +27,43 @@ def test_expand_compound_surname():
     assert text[out[0].start:out[0].end] == "歐陽志明"
 
 
+def test_expand_two_chars_when_ckip_marks_only_last_char():
+    # CKIP 只標名末字（驗屋報告真件：「委託人 林宜樺」→ span「樺」、輸出「林宜<PERSON>」）
+    text = "委託人 陳大文 "
+    results = [_person(6, 7)]
+    out = _expand_person_surname(results, text)
+    assert text[out[0].start:out[0].end] == "陳大文"
+
+
+def test_expand_three_chars_compound_surname_from_last_char():
+    text = "會同歐陽志明檢驗"
+    results = [_person(5, 6)]   # 只抓「明」
+    out = _expand_person_surname(results, text)
+    assert text[out[0].start:out[0].end] == "歐陽志明"
+
+
+def test_single_char_span_prefers_three_char_name_over_two():
+    # 「大」非姓氏、k=1 不成立；k=2 補到「陳」
+    text = "驗屋師陳大文到場"
+    results = [_person(5, 6)]   # 只抓「文」
+    out = _expand_person_surname(results, text)
+    assert text[out[0].start:out[0].end] == "陳大文"
+
+
+def test_no_expand_across_non_han():
+    text = "陳、文"
+    results = [_person(2, 3)]
+    out = _expand_person_surname(results, text)
+    assert (out[0].start, out[0].end) == (2, 3)   # 「、」擋住、不拼「陳、文」
+
+
+def test_four_char_married_double_surname_still_expands_by_one():
+    text = "業主陳林小明女士"
+    results = [_person(3, 6)]   # 「林小明」、前一字「陳」為姓（冠夫姓）
+    out = _expand_person_surname(results, text)
+    assert text[out[0].start:out[0].end] == "陳林小明"
+
+
 def test_no_expand_when_full_name_already():
     text = "買方：王小明先生"
     results = [_person(3, 6)]   # 已含姓、前一字是「：」

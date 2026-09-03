@@ -29,9 +29,13 @@ _LABELS = (
 
 # 「標籤 [|：:] （可夾空 cell）姓名」— 姓名捕捉群組吃 2-4 個漢字、後面必須接
 # cell 邊界（| / ：/ 換行 / 全形空白）避免吃進句子。
+# 分隔符第二形＝**單一換行**（cell-per-line 佈局：PDF 文字層把表格每格各印一行、
+# 「委託人 \n林宜樺 \n」——2026-09-03 驗屋報告頁尾表 27 處同型、CKIP 漏 1 處整名）。
+# 只容一個換行（行內空白可夾）、空行代表另一個區塊、不跨。
+_SEP = r"(?:\s*[|：:]\s*(?:\|\s*)*|[ \t　]*\n[ \t　]*)"
 _PATTERN = re.compile(
-    r"(?:" + "|".join(_LABELS) + r")\s*[|：:]\s*(?:\|\s*)*"
-    r"([一-龥]{2,4})(?=\s*(?:[|：:\n）)]|$))",
+    r"(?:" + "|".join(_LABELS) + r")" + _SEP
+    + r"([一-龥]{2,4})(?=\s*(?:[|：:\n）)]|$))",
     re.MULTILINE,
 )
 
@@ -60,10 +64,14 @@ class TwLabeledNameRecognizer(LocalRecognizer):
         if self.SUPPORTED_ENTITY not in entities:
             return []
         results: list[RecognizerResult] = []
-        for m in _PATTERN.finditer(text):
+        pos = 0
+        while (m := _PATTERN.search(text, pos)) is not None:
             name = m.group(1)
             # 姓氏起頭才算姓名形狀（「先生」「小姐」等稱謂、機關簡稱擋掉）
             if not (name[0] in TW_SURNAMES_1 or name[:2] in TW_SURNAMES_2):
+                # 落選的候選本身可能是下一個標籤（「委託人\n姓名\n林宜樺」）——
+                # 從候選起點重掃、不把它連同標籤一起消耗掉
+                pos = m.start(1)
                 continue
             results.append(RecognizerResult(
                 entity_type=self.SUPPORTED_ENTITY,
@@ -71,4 +79,5 @@ class TwLabeledNameRecognizer(LocalRecognizer):
                 end=m.end(1),
                 score=0.85,
             ))
+            pos = m.end(1)
         return results

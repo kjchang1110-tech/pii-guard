@@ -15,7 +15,8 @@ class TwBusinessIdRecognizer(LocalRecognizer):
 
     Uses two-layer filtering to minimize false positives:
     1. Context keyword within ±50 characters
-    2. Official MOF checksum validation (weighted digits + special rule for 7th digit = 7)
+    2. Official MOF checksum validation (weighted digits, mod 5 per 112/4 新制,
+       special rule for 7th digit = 7)
     """
 
     SUPPORTED_ENTITY: ClassVar[str] = "TW_BUSINESS_ID"
@@ -28,6 +29,7 @@ class TwBusinessIdRecognizer(LocalRecognizer):
     ]
     CONTEXT_WINDOW: ClassVar[int] = 50
     _WEIGHTS: ClassVar[list[int]] = [1, 2, 1, 2, 1, 2, 4, 1]
+    _MODULUS: ClassVar[int] = 5   # 112/4 新制；舊制 10（新制為舊制超集）
 
     def __init__(self) -> None:
         super().__init__(
@@ -67,8 +69,19 @@ class TwBusinessIdRecognizer(LocalRecognizer):
     @classmethod
     def _validate_checksum(cls, number: str) -> bool:
         """
-        Taiwan MOF checksum: sum weighted cross-products mod 10 == 0.
-        Special rule: when 7th digit (index 6) is '7', also accept (total - 1) % 10 == 0.
+        Taiwan MOF checksum (財政部 112/4 新制): weighted cross-product digit sum
+        divisible by **5** (pre-112/4 rule was 10; new numbers issued since then
+        only satisfy the mod-5 rule, and every old number still passes).
+        Ref: 財政資訊中心「營利事業統一編號檢查碼邏輯修正說明」——
+        https://www.fia.gov.tw/singlehtml/3?cntId=c4d9cff38c8642ef8872774ee9987283
+
+        Special rule when the 7th digit (index 6) is '7': its product 7×4=28
+        digit-sums to 2+8=10, and the MOF spec lets that term count as either
+        0 or 1 (official examples 10458575 → Z2=20 / 19312376 → Z1=30). The
+        naive sum below counts it as 10, so the two candidates are
+        ``total - 10`` and ``total - 9`` — i.e. ``total`` and ``total + 1`` mod 5.
+        (Previous implementation checked ``total - 1``, which rejects the
+        official example 19312376.)
         """
         if len(number) != 8 or not number.isdigit():
             return False
@@ -76,10 +89,9 @@ class TwBusinessIdRecognizer(LocalRecognizer):
             (int(d) * w) // 10 + (int(d) * w) % 10
             for d, w in zip(number, cls._WEIGHTS)
         )
-        if total % 10 == 0:
+        if total % cls._MODULUS == 0:
             return True
-        # Special case: 7 × 4 = 28 can also be counted as 9 (alternative path)
-        if number[6] == "7" and (total - 1) % 10 == 0:
+        if number[6] == "7" and (total + 1) % cls._MODULUS == 0:
             return True
         return False
 

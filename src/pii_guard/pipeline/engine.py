@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
@@ -201,6 +202,7 @@ def _filter_person_over_date(results: list[RecognizerResult]) -> list[Recognizer
 
 # Common Taiwan surnames (single-char, ~top 120 by frequency) plus frequent
 # compound surnames. Used by _expand_person_surname.
+_HAN_RUN_RE = re.compile(r"[一-龥]+")
 from pii_guard.recognizers.tw_surnames import (
     TW_SURNAMES_1 as _TW_SURNAMES_1,
     TW_SURNAMES_2 as _TW_SURNAMES_2,
@@ -210,12 +212,14 @@ from pii_guard.recognizers.tw_surnames import (
 def _expand_person_surname(
     results: list[RecognizerResult], text: str
 ) -> list[RecognizerResult]:
-    """Expand PERSON spans leftward to absorb a preceding surname character.
+    """Expand PERSON spans leftward until they start with a surname.
 
-    CKIP NER sometimes yields only the given name（「陳大文」→ span「大文」），
-    leaving the surname in the output. If the char(s) immediately before a
-    PERSON span form a common Taiwan surname and are not claimed by another
-    entity span, extend the PERSON span to include them.
+    CKIP NER sometimes yields only part of the given name（「陳大文」→ span
+    「大文」、or just the last char「文」），leaving「陳」or「陳大」in the output.
+    Try absorbing k preceding Han chars (largest k first) so the span becomes a
+    plausible Taiwan name: single surname → ≤3 chars（k=1 always allowed so a
+    4-char 冠夫姓「陳林小明」still expands as before）；compound surname → ≤4.
+    Absorbed chars must be Han and not claimed by another entity span.
     """
     occupied: list[tuple[int, int]] = [
         (r.start, r.end) for r in results
@@ -234,17 +238,20 @@ def _expand_person_surname(
             expanded.append(r)
             continue
         start = r.start
-        two = text[start - 2:start]
-        one = text[start - 1:start]
-        if (
-            len(two) == 2
-            and two in _TW_SURNAMES_2
-            and not _claimed(start - 2, r)
-            and not _claimed(start - 1, r)
-        ):
-            start -= 2
-        elif one and one in _TW_SURNAMES_1 and not _claimed(start - 1, r):
-            start -= 1
+        span_len = r.end - r.start
+        for k in range(min(3, 4 - span_len), 0, -1):
+            s = r.start - k
+            if s < 0:
+                continue
+            seg = text[s:r.start]
+            if not _HAN_RUN_RE.fullmatch(seg) or any(_claimed(p, r) for p in range(s, r.start)):
+                continue
+            if k >= 2 and seg[:2] in _TW_SURNAMES_2 and span_len + k <= 4:
+                start = s
+                break
+            if seg[0] in _TW_SURNAMES_1 and (span_len + k <= 3 or k == 1):
+                start = s
+                break
         if start != r.start:
             r = RecognizerResult(
                 entity_type=r.entity_type, start=start, end=r.end, score=r.score,
