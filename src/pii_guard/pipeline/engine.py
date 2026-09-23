@@ -309,6 +309,58 @@ def _trim_person_particles(
     return out
 
 
+def _harmonize_person_occurrences(
+    results: list[RecognizerResult], text: str, *, min_ref_score: float
+) -> list[RecognizerResult]:
+    """同文件同名一致化：拿別處偵測到的完整姓名修正 CKIP 邊界（P-8／P-9）。
+
+    CKIP 對同一人名在不同文脈給不同邊界 ⇒ 同一人多個 placeholder、且殘字外露：
+    - P-8 截短名末字：「林志和…林志和另行補件」第二處只標「林志」、「和」留在輸出。
+      → span 為另一姓名 span 的嚴格前綴、且原文緊接的字正好是差額 → 向右補齊。
+    - P-9 向左多吃：「業主張美玲」→「主張美玲」（「主」不在姓氏表、非 surname-expand 所致）。
+      → span **非**姓氏起頭、尾段等於另一姓氏起頭的姓名 span → 剪到該姓名。
+      「非姓氏起頭」是冠夫姓（陳林小明 vs 別處林小明）不被誤剪的護欄。
+
+    參考姓名只取過正式門檻、姓氏起頭、2–4 字的 PERSON span（低信心碎片不當依據）；
+    補齊的字不得被其他實體占用。
+    """
+    refs = sorted(
+        {text[r.start:r.end] for r in results
+         if r.entity_type == "PERSON" and r.score >= min_ref_score
+         and 2 <= r.end - r.start <= 4 and _surname_led(text[r.start:r.end])},
+        key=len, reverse=True,
+    )
+    if not refs:
+        return results
+
+    def _claimed(pos: int, current: RecognizerResult) -> bool:
+        return any(o.start <= pos < o.end for o in results if o is not current)
+
+    out: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type == "PERSON":
+            s = text[r.start:r.end]
+            start, end = r.start, r.end
+            if _surname_led(s):
+                for ref in refs:
+                    if len(ref) > len(s) and ref.startswith(s) \
+                            and text[r.end:r.start + len(ref)] == ref[len(s):] \
+                            and not any(_claimed(p, r) for p in range(r.end, r.start + len(ref))):
+                        end = r.start + len(ref)
+                        break
+            else:
+                for ref in refs:
+                    if len(ref) < len(s) and s.endswith(ref):
+                        start = r.end - len(ref)
+                        break
+            if (start, end) != (r.start, r.end):
+                r = RecognizerResult(
+                    entity_type=r.entity_type, start=start, end=end, score=r.score,
+                )
+        out.append(r)
+    return out
+
+
 def _boost_tw_name_shape(
     results: list[RecognizerResult], text: str
 ) -> list[RecognizerResult]:
@@ -393,6 +445,8 @@ class PiiGuardEngine:
         results = _filter_person_over_date(results)
         results = _expand_person_surname(results, text)
         results = _boost_tw_name_shape(results, text)
+        results = _harmonize_person_occurrences(
+            results, text, min_ref_score=self.score_threshold)
         results = [r for r in results if r.score >= self.score_threshold]
         return results
 
