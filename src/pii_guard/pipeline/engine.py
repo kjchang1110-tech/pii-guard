@@ -260,6 +260,55 @@ def _expand_person_surname(
     return expanded
 
 
+# CKIP 邊界常多吃相鄰虛詞（P-7、2026-09 真件＋重現：「與陳大文於現場」→「陳大|文於」合併成
+# 「陳大文於」、同一人兩處映射成兩個 placeholder；「林志和與王小明」→「與王小明」
+# 被 merge 跟「林志和」串成一人）。前導＝連接詞、尾字＝介詞／連接詞／助詞；皆非姓氏。
+_PERSON_LEAD_PARTICLES = frozenset("與及和跟暨")
+_PERSON_TRAIL_PARTICLES = frozenset("於之與及等")
+# 剝完只剩 2 字（單姓＋單名）時、名末字真是該字的機率不可忽略（「之」尤常見於名）→
+# 只對名末幾乎不用的字放行；其餘靠「全文別處有同名 span」佐證。
+_PERSON_TRAIL_SAFE_2 = frozenset("於")
+
+
+def _surname_led(s: str) -> bool:
+    return bool(s) and (s[0] in _TW_SURNAMES_1 or s[:2] in _TW_SURNAMES_2)
+
+
+def _trim_person_particles(
+    results: list[RecognizerResult], text: str, *, lead: bool, trail: bool
+) -> list[RecognizerResult]:
+    """剝 PERSON span 首尾的虛詞（每端至多一字）。
+
+    - 前導（`lead`）：首字為連接詞、剩餘 ≥2 字且姓氏起頭 → 剝。須在 merge **之前**跑，
+      否則「林志|和|與王小明」已被串成一段、剝首字無濟於事。
+    - 尾字（`trail`）：末字為虛詞、剩餘姓氏起頭，且（剩餘 ≥3 字〔單姓三字名已滿〕／
+      剩餘 2 字而末字屬 `_PERSON_TRAIL_SAFE_2`／剩餘字串與全文另一個 PERSON span 相同）
+      → 剝。merge 前後各跑一次：CKIP 可能給「陳大|文於」、單段看「文於」剝完不成姓名形狀。
+    """
+    others = {text[r.start:r.end] for r in results if r.entity_type == "PERSON"}
+    out: list[RecognizerResult] = []
+    for r in results:
+        if r.entity_type == "PERSON":
+            start, end = r.start, r.end
+            if lead and end - start >= 3 and text[start] in _PERSON_LEAD_PARTICLES \
+                    and _surname_led(text[start + 1:end]):
+                start += 1
+            if trail and end - start >= 3 and text[end - 1] in _PERSON_TRAIL_PARTICLES:
+                rest = text[start:end - 1]
+                if _surname_led(rest) and (
+                    len(rest) >= 3
+                    or text[end - 1] in _PERSON_TRAIL_SAFE_2
+                    or rest in others
+                ):
+                    end -= 1
+            if (start, end) != (r.start, r.end):
+                r = RecognizerResult(
+                    entity_type=r.entity_type, start=start, end=end, score=r.score,
+                )
+        out.append(r)
+    return out
+
+
 def _boost_tw_name_shape(
     results: list[RecognizerResult], text: str
 ) -> list[RecognizerResult]:
@@ -338,7 +387,9 @@ class PiiGuardEngine:
                     end=r.end + c_start,
                     score=r.score,
                 ))
+        results = _trim_person_particles(results, text, lead=True, trail=True)
         results = _merge_adjacent_spans(results)
+        results = _trim_person_particles(results, text, lead=False, trail=True)
         results = _filter_person_over_date(results)
         results = _expand_person_surname(results, text)
         results = _boost_tw_name_shape(results, text)
